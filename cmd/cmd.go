@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"context"
+
+	"github.com/pkg/errors"
+
 	"sentinel_bot/internal/build"
 	"sentinel_bot/internal/config"
 )
@@ -10,10 +14,11 @@ func Run(conf config.Config) error {
 
 	bot, err := builder.Bot()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "create bot")
 	}
 
-	bot.Run()
+	ctx := context.Background()
+	bot.Run(ctx)
 
 	return nil
 }

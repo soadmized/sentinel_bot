@@ -2,8 +2,10 @@ package build
 
 import (
 	"github.com/pkg/errors"
-	"sentinel_bot/internal/api"
+
+	"sentinel_bot/internal/bot"
 	"sentinel_bot/internal/config"
+	"sentinel_bot/internal/provider"
 )
 
 type Builder struct {
@@ -16,11 +18,17 @@ func New(conf config.Config) *Builder {
 	}
 }
 
-func (b *Builder) Bot() (*api.Sentinel, error) {
-	bot, err := api.New(b.conf)
+func (b *Builder) Bot() (*bot.SentinelBot, error) {
+	p := b.provider()
+
+	sentinelBot, err := bot.New(b.conf, p)
 	if err != nil {
-		return nil, errors.Wrap(err, "build sentinel bot")
+		return nil, errors.Wrap(err, "build sentinel sentinelBot")
 	}
 
-	return bot, nil
+	return sentinelBot, nil
+}
+
+func (b *Builder) provider() *provider.Provider {
+	return provider.New(b.conf)
 }
