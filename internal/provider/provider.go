@@ -80,14 +80,14 @@ func lastValuesReqBody(id string) (io.Reader, error) {
 		ID: id,
 	}
 
-	var buf *bytes.Buffer
+	var buf bytes.Buffer
 
-	err := json.NewEncoder(buf).Encode(body)
+	err := json.NewEncoder(&buf).Encode(body)
 	if err != nil {
 		return nil, errors.Wrap(err, "encode body")
 	}
 
-	return buf, nil
+	return &buf, nil
 }
 
 func (p *Provider) makeReq(ctx context.Context, endpoint string, body io.Reader) (*http.Request, error) {

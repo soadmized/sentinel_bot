@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -19,9 +20,8 @@ type Provider interface { // provide data from sentinel server
 }
 
 type SentinelBot struct {
-	bot          *tgbot.Bot
-	allowedUsers []int64
-	Provider     Provider
+	bot      *tgbot.Bot
+	Provider Provider
 }
 
 func New(conf config.Config, provider Provider) (*SentinelBot, error) {
@@ -29,8 +29,6 @@ func New(conf config.Config, provider Provider) (*SentinelBot, error) {
 
 	opts := []tgbot.Option{
 		tgbot.WithMiddlewares(mw.checkAuth),
-		tgbot.WithCallbackQueryDataHandler("button", tgbot.MatchTypePrefix, callbackHandler),
-		tgbot.WithCallbackQueryDataHandler("button", tgbot.MatchTypePrefix, callbackHandler),
 	}
 
 	bot, err := tgbot.New(conf.Token, opts...)
@@ -39,47 +37,65 @@ func New(conf config.Config, provider Provider) (*SentinelBot, error) {
 	}
 
 	return &SentinelBot{
-		bot:          bot,
-		allowedUsers: conf.AllowedUsers,
-		Provider:     provider,
+		bot:      bot,
+		Provider: provider,
 	}, nil
 }
 
 func (s *SentinelBot) Run(ctx context.Context) {
 	s.bot.RegisterHandler(tgbot.HandlerTypeMessageText, "/sensors", tgbot.MatchTypeExact, s.sensorsHandler)
+	s.bot.RegisterHandler(tgbot.HandlerTypeCallbackQueryData, "sensor", tgbot.MatchTypePrefix, s.sensorCallbackHandler)
 
 	s.bot.Start(ctx)
 }
 
-func callbackHandler(ctx context.Context, b *tgbot.Bot, update *models.Update) {
-	b.AnswerCallbackQuery(ctx, &tgbot.AnswerCallbackQueryParams{ //nolint:errcheck,exhaustruct
+// sensorCallbackHandler is callback handler for exact sensor query from inline keyboard.
+func (s *SentinelBot) sensorCallbackHandler(ctx context.Context, b *tgbot.Bot, update *models.Update) {
+	data, err := s.Provider.LastValues(ctx, "first") // TODO sensorID
+	if err != nil {
+		s.errorHandler(ctx, update.Message.Chat.ID, err)
+	}
+
+	payload := fmt.Sprintf("Last values (at %s) from %s sensor: temp = %.2f, light = %d, motion = %t",
+		data.UpdatedAt.Local().Format(time.RFC822), //nolint:gosmopolitan
+		data.ID,
+		data.Temp,
+		data.Light,
+		data.Motion,
+	)
+
+	_, err = b.AnswerCallbackQuery(ctx, &tgbot.AnswerCallbackQueryParams{ //nolint:exhaustruct
 		CallbackQueryID: update.CallbackQuery.ID,
 		ShowAlert:       false,
 	})
-	b.SendMessage(ctx, &tgbot.SendMessageParams{ //nolint:errcheck,exhaustruct
+	if err != nil {
+		s.errorHandler(ctx, update.Message.Chat.ID, err)
+	}
+
+	_, err = b.SendMessage(ctx, &tgbot.SendMessageParams{ //nolint:exhaustruct
 		ChatID: update.CallbackQuery.Message.Message.Chat.ID,
-		Text:   "You selected the button: " + update.CallbackQuery.Data,
+		Text:   payload,
 	})
+	if err != nil {
+		s.errorHandler(ctx, update.Message.Chat.ID, err)
+	}
 }
 
+// sensorsHandler is handler for /sensors command.
 func (s *SentinelBot) sensorsHandler(ctx context.Context, b *tgbot.Bot, update *models.Update) {
 	ids, err := s.Provider.SensorIDs(ctx)
 	if err != nil {
-		s.bot.SendMessage(ctx, &tgbot.SendMessageParams{ //nolint:errcheck,exhaustruct
-			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("error occurred %s, sentinel is offline", err.Error()),
-		})
-
-		log.Fatal(err)
+		s.errorHandler(ctx, update.Message.Chat.ID, err)
 	}
 
-	kb := createSensorsKeyboard(ids)
-
-	b.SendMessage(ctx, &tgbot.SendMessageParams{ //nolint:errcheck,exhaustruct
+	_, err = s.bot.SendMessage(ctx, &tgbot.SendMessageParams{ //nolint:exhaustruct
 		ChatID:      update.Message.Chat.ID,
 		Text:        "Available sensors",
-		ReplyMarkup: kb,
+		ReplyMarkup: createSensorsKeyboard(ids),
 	})
+	if err != nil {
+		s.errorHandler(ctx, update.Message.Chat.ID, err)
+	}
 }
 
 func createSensorsKeyboard(ids []string) *models.InlineKeyboardMarkup {
@@ -97,4 +113,13 @@ func createSensorsKeyboard(ids []string) *models.InlineKeyboardMarkup {
 	}
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: buttons}
+}
+
+func (s *SentinelBot) errorHandler(ctx context.Context, chatID int64, err error) {
+	s.bot.SendMessage(ctx, &tgbot.SendMessageParams{ //nolint:errcheck,exhaustruct
+		ChatID: chatID,
+		Text:   fmt.Sprintf("error occurred %s, sentinel is offline", err.Error()),
+	})
+
+	log.Fatal(err)
 }
